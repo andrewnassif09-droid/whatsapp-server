@@ -5,10 +5,9 @@
   "scripts": { "start": "node server.js" },
   "dependencies": {
     "express": "^4.18.2",
-    "whatsapp-web.js": "^1.23.0",
+    "@whiskeysockets/baileys": "^6.7.0",
     "qrcode": "^1.5.3",
-    "qrcode-terminal": "^0.12.0",
     "node-cron": "^3.0.3",
-    "puppeteer": "^24.15.0"
+    "pino": "^8.0.0"
   }
 }
