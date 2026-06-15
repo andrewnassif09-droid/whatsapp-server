@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: attendance-whatsapp
+    runtime: node
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: PORT
+        value: 3000
+      - key: API_KEY
+        generateValue: true        # Render بيولّد مفتاح عشوائي تلقائياً
+      - key: ADMIN_PHONE
+        value: "201XXXXXXXXX"      # ← رقم المشرف (بدون +)
+      - key: GAS_URL
+        value: ""                  # ← URL الـ Apps Script
+      - key: SUMMARY_HOUR
+        value: "21"                # ← ساعة الملخص اليومي (9 مساءً)
+      - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
+        value: "false"
