@@ -9,6 +9,6 @@
     "qrcode": "^1.5.3",
     "qrcode-terminal": "^0.12.0",
     "node-cron": "^3.0.3",
-    "axios": "^1.6.0"
+    "puppeteer": "^21.0.0"
   }
 }
