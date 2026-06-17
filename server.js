@@ -8,6 +8,50 @@ const PORT = process.env.PORT || 10000;
 const INSTANCE = process.env.ULTRAMSG_INSTANCE;
 const TOKEN = process.env.ULTRAMSG_TOKEN;
 
+function calculateLateFine(scanTime, lateAfter, stepMinutes = 5, stepAmount = 5) {
+  const [scanHour, scanMinute] = scanTime.split(":").map(Number);
+  const [lateHour, lateMinute] = lateAfter.split(":").map(Number);
+
+  const scanTotalMinutes = scanHour * 60 + scanMinute;
+  const lateTotalMinutes = lateHour * 60 + lateMinute;
+
+  if (scanTotalMinutes <= lateTotalMinutes) {
+    return {
+      status: "Present",
+      lateMinutes: 0,
+      fine: 0
+    };
+  }
+
+  const lateMinutes = scanTotalMinutes - lateTotalMinutes;
+  const fine = Math.ceil(lateMinutes / stepMinutes) * stepAmount;
+
+  return {
+    status: "Late",
+    lateMinutes,
+    fine
+  };
+}
+
+async function sendWhatsApp(phone, message) {
+  const response = await fetch(
+    `https://api.ultramsg.com/${INSTANCE}/messages/chat`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: new URLSearchParams({
+        token: TOKEN,
+        to: phone,
+        body: message
+      })
+    }
+  );
+
+  return await response.json();
+}
+
 app.get("/", (req, res) => {
   res.send("Attendance WhatsApp Server Running");
 });
@@ -31,22 +75,7 @@ app.post("/send", async (req, res) => {
       });
     }
 
-    const response = await fetch(
-      `https://api.ultramsg.com/${INSTANCE}/messages/chat`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded"
-        },
-        body: new URLSearchParams({
-          token: TOKEN,
-          to: phone,
-          body: message
-        })
-      }
-    );
-
-    const data = await response.json();
+    const data = await sendWhatsApp(phone, message);
 
     res.json({
       success: true,
@@ -62,38 +91,57 @@ app.post("/send", async (req, res) => {
 
 app.post("/attendance", async (req, res) => {
   try {
-    const { name, phone, lecture, status, time } = req.body;
+    const {
+      name,
+      phone,
+      lecture,
+      scanTime,
+      lateAfter,
+      stepMinutes,
+      stepAmount
+    } = req.body;
 
-    const message = `مرحباً ${name || ""}
+    if (!name || !phone || !lecture || !scanTime || !lateAfter) {
+      return res.status(400).json({
+        success: false,
+        error: "name, phone, lecture, scanTime and lateAfter are required"
+      });
+    }
 
-تم تسجيل حضورك بنجاح ✅
-
-المحاضرة: ${lecture || "-"}
-الحالة: ${status || "-"}
-الوقت: ${time || new Date().toLocaleString("en-GB", { timeZone: "Africa/Cairo" })}`;
-
-    const response = await fetch(
-      `https://api.ultramsg.com/${INSTANCE}/messages/chat`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded"
-        },
-        body: new URLSearchParams({
-          token: TOKEN,
-          to: phone,
-          body: message
-        })
-      }
+    const result = calculateLateFine(
+      scanTime,
+      lateAfter,
+      Number(stepMinutes) || 5,
+      Number(stepAmount) || 5
     );
 
-    const data = await response.json();
+    let whatsappStatus = "Not Sent";
+
+    if (result.status === "Late") {
+      const message = `مرحباً ${name}
+
+⚠️ تم تسجيلك كمتأخر في ${lecture}
+
+وقت الحضور: ${scanTime}
+مدة التأخير: ${result.lateMinutes} دقيقة
+الغرامة: ${result.fine} جنيه`;
+
+      await sendWhatsApp(phone, message);
+
+      whatsappStatus = "Sent";
+    }
 
     res.json({
       success: true,
-      sentTo: phone,
-      message,
-      ultramsg: data
+      name,
+      phone,
+      lecture,
+      scanTime,
+      lateAfter,
+      status: result.status,
+      lateMinutes: result.lateMinutes,
+      fine: result.fine,
+      whatsapp: whatsappStatus
     });
   } catch (err) {
     res.status(500).json({
