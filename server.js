@@ -7,31 +7,7 @@ const PORT = process.env.PORT || 10000;
 
 const INSTANCE = process.env.ULTRAMSG_INSTANCE;
 const TOKEN = process.env.ULTRAMSG_TOKEN;
-
-function calculateLateFine(scanTime, lateAfter, stepMinutes = 5, stepAmount = 5) {
-  const [scanHour, scanMinute] = scanTime.split(":").map(Number);
-  const [lateHour, lateMinute] = lateAfter.split(":").map(Number);
-
-  const scanTotalMinutes = scanHour * 60 + scanMinute;
-  const lateTotalMinutes = lateHour * 60 + lateMinute;
-
-  if (scanTotalMinutes <= lateTotalMinutes) {
-    return {
-      status: "Present",
-      lateMinutes: 0,
-      fine: 0
-    };
-  }
-
-  const lateMinutes = scanTotalMinutes - lateTotalMinutes;
-  const fine = Math.ceil(lateMinutes / stepMinutes) * stepAmount;
-
-  return {
-    status: "Late",
-    lateMinutes,
-    fine
-  };
-}
+const GAS_URL = process.env.GAS_URL;
 
 async function sendWhatsApp(phone, message) {
   const response = await fetch(
@@ -52,15 +28,79 @@ async function sendWhatsApp(phone, message) {
   return await response.json();
 }
 
+async function processScan(uid) {
+  try {
+    console.log("📥 Processing UID:", uid);
+
+    const response = await fetch(GAS_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ uid })
+    });
+
+    const data = await response.json();
+    console.log("📊 GAS Response:", data);
+
+    if (!data.success) {
+      console.log("❌ GAS Error:", data.error);
+      return;
+    }
+
+    if (data.sendWhatsApp && data.phone) {
+      const message = `مرحباً ${data.name}
+
+⚠️ تم تسجيلك كمتأخر في ${data.lecture}
+
+اليوم: ${data.day}
+وقت الحضور: ${data.scanTime}
+مدة التأخير: ${data.lateMinutes} دقيقة
+الغرامة: ${data.fine} جنيه`;
+
+      const waResult = await sendWhatsApp(data.phone, message);
+      console.log("✅ WhatsApp sent:", waResult);
+    } else {
+      console.log("ℹ️ No WhatsApp needed");
+    }
+
+  } catch (err) {
+    console.log("❌ processScan error:", err.message);
+  }
+}
+
 app.get("/", (req, res) => {
-  res.send("Attendance WhatsApp Server Running");
+  res.send("Fast Attendance Server Running");
 });
 
 app.get("/status", (req, res) => {
   res.json({
     server: "online",
+    gas_url: GAS_URL ? "set" : "missing",
     ultramsg_instance: INSTANCE ? "set" : "missing",
     ultramsg_token: TOKEN ? "set" : "missing"
+  });
+});
+
+app.post("/scan", (req, res) => {
+  const { uid } = req.body;
+
+  if (!uid) {
+    return res.status(400).json({
+      success: false,
+      error: "uid is required"
+    });
+  }
+
+  // الرد السريع للـ ESP32
+  res.json({
+    success: true,
+    message: "Scan received"
+  });
+
+  // الشغل التقيل يحصل بعد الرد
+  setImmediate(() => {
+    processScan(uid);
   });
 });
 
@@ -81,68 +121,7 @@ app.post("/send", async (req, res) => {
       success: true,
       ultramsg: data
     });
-  } catch (err) {
-    res.status(500).json({
-      success: false,
-      error: err.message
-    });
-  }
-});
 
-app.post("/attendance", async (req, res) => {
-  try {
-    const {
-      name,
-      phone,
-      lecture,
-      scanTime,
-      lateAfter,
-      stepMinutes,
-      stepAmount
-    } = req.body;
-
-    if (!name || !phone || !lecture || !scanTime || !lateAfter) {
-      return res.status(400).json({
-        success: false,
-        error: "name, phone, lecture, scanTime and lateAfter are required"
-      });
-    }
-
-    const result = calculateLateFine(
-      scanTime,
-      lateAfter,
-      Number(stepMinutes) || 5,
-      Number(stepAmount) || 5
-    );
-
-    let whatsappStatus = "Not Sent";
-
-    if (result.status === "Late") {
-      const message = `مرحباً ${name}
-
-⚠️ تم تسجيلك كمتأخر في ${lecture}
-
-وقت الحضور: ${scanTime}
-مدة التأخير: ${result.lateMinutes} دقيقة
-الغرامة: ${result.fine} جنيه`;
-
-      await sendWhatsApp(phone, message);
-
-      whatsappStatus = "Sent";
-    }
-
-    res.json({
-      success: true,
-      name,
-      phone,
-      lecture,
-      scanTime,
-      lateAfter,
-      status: result.status,
-      lateMinutes: result.lateMinutes,
-      fine: result.fine,
-      whatsapp: whatsappStatus
-    });
   } catch (err) {
     res.status(500).json({
       success: false,
