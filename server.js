@@ -4,13 +4,14 @@ const {
   DisconnectReason,
   useMultiFileAuthState
 } = require("@whiskeysockets/baileys");
+
 const qrcode = require("qrcode");
 const pino = require("pino");
 
 const app = express();
 app.use(express.json());
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 
 let sock = null;
 let waReady = false;
@@ -19,59 +20,86 @@ let isStarting = false;
 
 async function startWhatsApp() {
   if (isStarting) return;
+
   isStarting = true;
 
   try {
     console.log("🔄 بدء تشغيل WhatsApp...");
 
-    const { state, saveCreds } = await useMultiFileAuthState("./wa-session-new");
+    const { state, saveCreds } =
+      await useMultiFileAuthState("./wa-session-new2");
+
+    console.log("✅ session loaded");
 
     sock = makeWASocket({
       auth: state,
-      logger: pino({ level: "silent" }),
+      logger: pino({ level: "info" }),
       printQRInTerminal: true,
-      browser: ["Attendance Server", "Chrome", "1.0"]
+      browser: ["Ubuntu", "Chrome", "20.0.04"],
+      syncFullHistory: false,
+      markOnlineOnConnect: false
     });
+
+    console.log("✅ socket created");
 
     sock.ev.on("creds.update", saveCreds);
 
-    sock.ev.on("connection.update", async ({ connection, lastDisconnect, qr }) => {
-      console.log("📡 update:", connection, "qr:", !!qr);
+    sock.ev.on(
+      "connection.update",
+      async ({ connection, lastDisconnect, qr }) => {
+        console.log("📡 update:", connection, "qr:", !!qr);
 
-      if (qr) {
-        qrDataUrl = await qrcode.toDataURL(qr);
-        console.log("📱 QR جاهز!");
-      }
+        if (qr) {
+          console.log("📱 QR RECEIVED");
 
-      if (connection === "open") {
-        waReady = true;
-        qrDataUrl = null;
-        isStarting = false;
-        console.log("✅ WhatsApp متصل!");
-      }
+          try {
+            qrDataUrl = await qrcode.toDataURL(qr);
+            console.log("✅ QR GENERATED");
+          } catch (err) {
+            console.log("❌ QR ERROR:", err.message);
+          }
+        }
 
-      if (connection === "close") {
-        waReady = false;
-        qrDataUrl = null;
-        isStarting = false;
+        if (connection === "open") {
+          waReady = true;
+          qrDataUrl = null;
+          isStarting = false;
 
-        const reason = lastDisconnect?.error?.output?.statusCode;
-        console.log("❌ connection closed, reason:", reason);
+          console.log("✅ WhatsApp Connected");
+        }
 
-        const shouldReconnect = reason !== DisconnectReason.loggedOut;
+        if (connection === "close") {
+          waReady = false;
+          qrDataUrl = null;
+          isStarting = false;
 
-        if (shouldReconnect) {
-          console.log("🔁 إعادة المحاولة بعد 15 ثانية...");
-          setTimeout(startWhatsApp, 15000);
-        } else {
-          console.log("🚪 Logged out. Change session folder name to generate new QR.");
+          const reason =
+            lastDisconnect?.error?.output?.statusCode;
+
+          console.log("❌ Connection Closed");
+          console.log("Reason:", reason);
+
+          const shouldReconnect =
+            reason !== DisconnectReason.loggedOut;
+
+          if (shouldReconnect) {
+            console.log("🔁 Reconnect after 15 sec");
+
+            setTimeout(() => {
+              startWhatsApp();
+            }, 15000);
+          }
         }
       }
-    });
-  } catch (e) {
+    );
+  } catch (err) {
+    console.error("❌ Start Error:", err);
+
     isStarting = false;
-    console.error("❌ خطأ في startWhatsApp:", e.message);
-    setTimeout(startWhatsApp, 15000);
+
+    setTimeout(() => {
+      startWhatsApp();
+    }, 15000);
   }
 }
 
@@ -91,14 +119,20 @@ app.get("/status", (req, res) => {
 
 app.get("/qr", (req, res) => {
   if (waReady) {
-    return res.send("<h2 style='color:green'>✅ WhatsApp متصل!</h2>");
+    return res.send(`
+      <h2 style="color:green">
+        ✅ WhatsApp Connected
+      </h2>
+    `);
   }
 
   if (!qrDataUrl) {
     return res.send(`
       <h2>⏳ جاري توليد QR...</h2>
       <p>استنى 10 ثواني واعمل Refresh</p>
-      <script>setTimeout(()=>location.reload(),3000)</script>
+      <script>
+        setTimeout(() => location.reload(), 3000);
+      </script>
     `);
   }
 
@@ -109,11 +143,25 @@ app.get("/qr", (req, res) => {
       <meta charset="UTF-8">
       <title>WhatsApp QR</title>
     </head>
-    <body style="text-align:center;padding:40px;font-family:sans-serif">
+    <body style="
+      text-align:center;
+      padding:40px;
+      font-family:sans-serif;
+    ">
       <h2>📱 امسح QR بواتساب</h2>
-      <img src="${qrDataUrl}" width="280"/>
-      <p>WhatsApp → Linked devices → Link a device</p>
-      <script>setTimeout(()=>location.reload(),5000)</script>
+
+      <img
+        src="${qrDataUrl}"
+        width="300"
+      />
+
+      <p>
+        WhatsApp → Linked Devices → Link Device
+      </p>
+
+      <script>
+        setTimeout(() => location.reload(), 5000);
+      </script>
     </body>
     </html>
   `);
@@ -123,46 +171,27 @@ app.post("/send", async (req, res) => {
   try {
     const { phone, message } = req.body;
 
-    if (!waReady || !sock) {
-      return res.status(503).json({ success: false, error: "WhatsApp not connected" });
+    if (!waReady) {
+      return res.status(500).json({
+        success: false,
+        error: "WhatsApp not connected"
+      });
     }
 
-    if (!phone || !message) {
-      return res.status(400).json({ success: false, error: "phone and message are required" });
-    }
+    const jid = `${phone}@s.whatsapp.net`;
 
-    const jid = phone + "@s.whatsapp.net";
+    await sock.sendMessage(jid, {
+      text: message
+    });
 
-    await sock.sendMessage(jid, { text: message });
-
-    res.json({ success: true, sentTo: phone });
-  } catch (e) {
-    res.status(500).json({ success: false, error: e.message });
-  }
-});
-
-app.post("/attendance", async (req, res) => {
-  try {
-    const { name, phone, lecture, status, time } = req.body;
-
-    if (!waReady || !sock) {
-      return res.status(503).json({ success: false, error: "WhatsApp not connected" });
-    }
-
-    const message = `مرحباً ${name || ""}
-
-تم تسجيل حضورك بنجاح.
-المحاضرة: ${lecture || "-"}
-الحالة: ${status || "-"}
-الوقت: ${time || new Date().toLocaleString("en-GB", { timeZone: "Africa/Cairo" })}`;
-
-    const jid = phone + "@s.whatsapp.net";
-
-    await sock.sendMessage(jid, { text: message });
-
-    res.json({ success: true, sentTo: phone, message });
-  } catch (e) {
-    res.status(500).json({ success: false, error: e.message });
+    res.json({
+      success: true
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
   }
 });
 
