@@ -15,7 +15,7 @@ let qrDataUrl = null;
 async function startWhatsApp() {
   try {
     console.log("🔄 بدء تشغيل WhatsApp...");
-    const { state, saveCreds } = await useMultiFileAuthState("./wa-session");
+const { state, saveCreds } = await useMultiFileAuthState("./wa-session-new");
     console.log("✅ session loaded");
 
     sock = makeWASocket({
@@ -37,11 +37,22 @@ async function startWhatsApp() {
         waReady = true;
         console.log("✅ WhatsApp متصل!");
       }
-      if (connection === "close") {
-        waReady = false;
-        const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-        if (shouldReconnect) setTimeout(startWhatsApp, 5000);
-      }
+     if (connection === "close") {
+  waReady = false;
+  qrDataUrl = null;
+
+  const reason = lastDisconnect?.error?.output?.statusCode;
+  console.log("❌ connection closed, reason:", reason);
+
+  const shouldReconnect = reason !== DisconnectReason.loggedOut;
+
+  if (shouldReconnect) {
+    console.log("🔁 إعادة المحاولة بعد 15 ثانية...");
+    setTimeout(startWhatsApp, 15000);
+  } else {
+    console.log("🚪 Logged out. Change session folder name to generate new QR.");
+  }
+}
     });
   } catch(e) {
     console.error("❌ خطأ في startWhatsApp:", e.message);
