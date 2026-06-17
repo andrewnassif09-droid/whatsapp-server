@@ -9,30 +9,7 @@ const INSTANCE = process.env.ULTRAMSG_INSTANCE;
 const TOKEN = process.env.ULTRAMSG_TOKEN;
 const GAS_URL = process.env.GAS_URL;
 
-function formatPhone(phone) {
-  let p = String(phone).trim();
-
-  p = p.replace(/\s+/g, "");
-  p = p.replace("+", "");
-
-  // لو الرقم مصري يبدأ بـ 01
-  if (p.startsWith("01")) {
-    p = "2" + p;
-  }
-
-  // لو الرقم يبدأ بـ 201 تمام
-  return p;
-}
-
 async function sendWhatsApp(phone, message) {
-  if (!INSTANCE || !TOKEN) {
-    throw new Error("UltraMsg INSTANCE or TOKEN is missing");
-  }
-
-  const formattedPhone = formatPhone(phone);
-
-  console.log("📞 Sending WhatsApp to:", formattedPhone);
-
   const response = await fetch(
     `https://api.ultramsg.com/${INSTANCE}/messages/chat`,
     {
@@ -42,36 +19,17 @@ async function sendWhatsApp(phone, message) {
       },
       body: new URLSearchParams({
         token: TOKEN,
-        to: formattedPhone,
+        to: phone,
         body: message
       })
     }
   );
 
-  const text = await response.text();
-
-  console.log("📩 UltraMsg raw response:", text);
-
-  let data;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    data = { raw: text };
-  }
-
-  if (!response.ok) {
-    throw new Error(`UltraMsg HTTP Error: ${response.status}`);
-  }
-
-  return data;
+  return await response.json();
 }
 
 async function processScan(uid) {
   try {
-    if (!GAS_URL) {
-      throw new Error("GAS_URL is missing");
-    }
-
     console.log("📥 Processing UID:", uid);
 
     const response = await fetch(GAS_URL, {
@@ -82,40 +40,33 @@ async function processScan(uid) {
       body: JSON.stringify({ uid })
     });
 
-    const text = await response.text();
-    console.log("📊 GAS raw response:", text);
+    const data = await response.json();
 
-    let data;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      throw new Error("GAS did not return valid JSON");
-    }
+    console.log("📊 GAS Response:", data);
 
     if (!data.success) {
       console.log("❌ GAS Error:", data.error);
       return;
     }
 
-    console.log("✅ GAS parsed:", data);
+    if (data.status === "Late" && data.phone) {
+      const message = `مرحباً ${data.name}
 
-    if (data.sendWhatsApp === true && data.phone) {
-      const message = `مرحباً ${data.name || "طالب"}
+⚠️ تم تسجيلك كمتأخر في ${data.lecture}
 
-⚠️ تم تسجيلك كمتأخر في ${data.lecture || ""}
-
-اليوم: ${data.day || ""}
-وقت الحضور: ${data.scanTime || ""}
-مدة التأخير: ${data.lateMinutes || 0} دقيقة
-الغرامة: ${data.fine || 0} جنيه`;
+التاريخ: ${data.date || "-"}
+وقت الحضور: ${data.scanTime}
+مدة التأخير: ${data.lateMinutes} دقيقة
+الغرامة: ${data.fine} جنيه`;
 
       const waResult = await sendWhatsApp(data.phone, message);
 
-      console.log("✅ WhatsApp result:", waResult);
+      console.log("✅ WhatsApp sent:", waResult);
     } else {
-      console.log("ℹ️ No WhatsApp needed");
-      console.log("sendWhatsApp:", data.sendWhatsApp);
-      console.log("phone:", data.phone);
+      console.log("ℹ️ No WhatsApp needed", {
+        status: data.status,
+        phone: data.phone
+      });
     }
 
   } catch (err) {
@@ -175,8 +126,6 @@ app.post("/send", async (req, res) => {
     });
 
   } catch (err) {
-    console.log("❌ /send error:", err.message);
-
     res.status(500).json({
       success: false,
       error: err.message
