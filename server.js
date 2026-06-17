@@ -44,6 +44,17 @@ async function processScan(uid) {
 
     console.log("📊 GAS Response:", data);
 
+    if (data.alreadyRecorded) {
+      console.log("⚠️ Already recorded:", {
+        uid: data.uid,
+        name: data.name,
+        lecture: data.lecture,
+        date: data.date,
+        scanTime: data.scanTime
+      });
+      return;
+    }
+
     if (!data.success) {
       console.log("❌ GAS Error:", data.error);
       return;
