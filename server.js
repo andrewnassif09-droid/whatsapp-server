@@ -1,191 +1,99 @@
 const express = require("express");
-const {
-  default: makeWASocket,
-  DisconnectReason,
-  useMultiFileAuthState
-} = require("@whiskeysockets/baileys");
-
-const qrcode = require("qrcode");
-const pino = require("pino");
 
 const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 
-let sock = null;
-let waReady = false;
-let qrDataUrl = null;
-let isStarting = false;
-
-async function startWhatsApp() {
-  if (isStarting) return;
-
-  isStarting = true;
-
-  try {
-    console.log("🔄 بدء تشغيل WhatsApp...");
-
-    const { state, saveCreds } =
-      await useMultiFileAuthState("./wa-session-new2");
-
-    console.log("✅ session loaded");
-
-    sock = makeWASocket({
-      auth: state,
-      logger: pino({ level: "info" }),
-      printQRInTerminal: true,
-      browser: ["Ubuntu", "Chrome", "20.0.04"],
-      syncFullHistory: false,
-      markOnlineOnConnect: false
-    });
-
-    console.log("✅ socket created");
-
-    sock.ev.on("creds.update", saveCreds);
-
-    sock.ev.on(
-      "connection.update",
-      async ({ connection, lastDisconnect, qr }) => {
-        console.log("📡 update:", connection, "qr:", !!qr);
-
-        if (qr) {
-          console.log("📱 QR RECEIVED");
-
-          try {
-            qrDataUrl = await qrcode.toDataURL(qr);
-            console.log("✅ QR GENERATED");
-          } catch (err) {
-            console.log("❌ QR ERROR:", err.message);
-          }
-        }
-
-        if (connection === "open") {
-          waReady = true;
-          qrDataUrl = null;
-          isStarting = false;
-
-          console.log("✅ WhatsApp Connected");
-        }
-
-        if (connection === "close") {
-          waReady = false;
-          qrDataUrl = null;
-          isStarting = false;
-
-          const reason =
-            lastDisconnect?.error?.output?.statusCode;
-
-          console.log("❌ Connection Closed");
-          console.log("Reason:", reason);
-
-          const shouldReconnect =
-            reason !== DisconnectReason.loggedOut;
-
-          if (shouldReconnect) {
-            console.log("🔁 Reconnect after 15 sec");
-
-            setTimeout(() => {
-              startWhatsApp();
-            }, 15000);
-          }
-        }
-      }
-    );
-  } catch (err) {
-    console.error("❌ Start Error:", err);
-
-    isStarting = false;
-
-    setTimeout(() => {
-      startWhatsApp();
-    }, 15000);
-  }
-}
-
-startWhatsApp();
+const INSTANCE = process.env.ULTRAMSG_INSTANCE;
+const TOKEN = process.env.ULTRAMSG_TOKEN;
 
 app.get("/", (req, res) => {
-  res.send("Attendance Server Running");
+  res.send("Attendance WhatsApp Server Running");
 });
 
 app.get("/status", (req, res) => {
   res.json({
     server: "online",
-    whatsapp: waReady ? "connected" : "disconnected",
-    qr: qrDataUrl ? "ready" : "not_ready"
+    ultramsg_instance: INSTANCE ? "set" : "missing",
+    ultramsg_token: TOKEN ? "set" : "missing"
   });
-});
-
-app.get("/qr", (req, res) => {
-  if (waReady) {
-    return res.send(`
-      <h2 style="color:green">
-        ✅ WhatsApp Connected
-      </h2>
-    `);
-  }
-
-  if (!qrDataUrl) {
-    return res.send(`
-      <h2>⏳ جاري توليد QR...</h2>
-      <p>استنى 10 ثواني واعمل Refresh</p>
-      <script>
-        setTimeout(() => location.reload(), 3000);
-      </script>
-    `);
-  }
-
-  res.send(`
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="UTF-8">
-      <title>WhatsApp QR</title>
-    </head>
-    <body style="
-      text-align:center;
-      padding:40px;
-      font-family:sans-serif;
-    ">
-      <h2>📱 امسح QR بواتساب</h2>
-
-      <img
-        src="${qrDataUrl}"
-        width="300"
-      />
-
-      <p>
-        WhatsApp → Linked Devices → Link Device
-      </p>
-
-      <script>
-        setTimeout(() => location.reload(), 5000);
-      </script>
-    </body>
-    </html>
-  `);
 });
 
 app.post("/send", async (req, res) => {
   try {
     const { phone, message } = req.body;
 
-    if (!waReady) {
-      return res.status(500).json({
+    if (!phone || !message) {
+      return res.status(400).json({
         success: false,
-        error: "WhatsApp not connected"
+        error: "phone and message are required"
       });
     }
 
-    const jid = `${phone}@s.whatsapp.net`;
+    const response = await fetch(
+      `https://api.ultramsg.com/${INSTANCE}/messages/chat`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded"
+        },
+        body: new URLSearchParams({
+          token: TOKEN,
+          to: phone,
+          body: message
+        })
+      }
+    );
 
-    await sock.sendMessage(jid, {
-      text: message
-    });
+    const data = await response.json();
 
     res.json({
-      success: true
+      success: true,
+      ultramsg: data
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+});
+
+app.post("/attendance", async (req, res) => {
+  try {
+    const { name, phone, lecture, status, time } = req.body;
+
+    const message = `مرحباً ${name || ""}
+
+تم تسجيل حضورك بنجاح ✅
+
+المحاضرة: ${lecture || "-"}
+الحالة: ${status || "-"}
+الوقت: ${time || new Date().toLocaleString("en-GB", { timeZone: "Africa/Cairo" })}`;
+
+    const response = await fetch(
+      `https://api.ultramsg.com/${INSTANCE}/messages/chat`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded"
+        },
+        body: new URLSearchParams({
+          token: TOKEN,
+          to: phone,
+          body: message
+        })
+      }
+    );
+
+    const data = await response.json();
+
+    res.json({
+      success: true,
+      sentTo: phone,
+      message,
+      ultramsg: data
     });
   } catch (err) {
     res.status(500).json({
