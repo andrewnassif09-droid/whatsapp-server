@@ -28,6 +28,35 @@ async function sendWhatsApp(phone, message) {
   return await response.json();
 }
 
+function isWhatsAppSent(waResult) {
+  if (!waResult) return false;
+
+  if (waResult.sent === true) return true;
+  if (waResult.success === true) return true;
+
+  if (waResult.id) return true;
+  if (waResult.message && String(waResult.message).toLowerCase().includes("sent")) return true;
+
+  return false;
+}
+
+async function markWhatsAppSentInSheet(data) {
+  const response = await fetch(GAS_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      action: "markWhatsAppSent",
+      uid: data.uid,
+      lecture: data.lecture,
+      date: data.date
+    })
+  });
+
+  return await response.json();
+}
+
 async function processScan(uid) {
   try {
     console.log("📥 Processing UID:", uid);
@@ -44,6 +73,11 @@ async function processScan(uid) {
 
     console.log("📊 GAS Response:", data);
 
+    if (!data.success) {
+      console.log("❌ GAS Error:", data.error);
+      return;
+    }
+
     if (data.alreadyRecorded) {
       console.log("⚠️ Already recorded:", {
         uid: data.uid,
@@ -55,12 +89,7 @@ async function processScan(uid) {
       return;
     }
 
-    if (!data.success) {
-      console.log("❌ GAS Error:", data.error);
-      return;
-    }
-
-    if (data.status === "Late" && data.phone) {
+    if (data.sendWhatsApp === true && data.phone) {
       const message = `مرحباً ${data.name}
 
 ⚠️ تم تسجيلك كمتأخر في ${data.lecture}
@@ -72,10 +101,19 @@ async function processScan(uid) {
 
       const waResult = await sendWhatsApp(data.phone, message);
 
-      console.log("✅ WhatsApp sent:", waResult);
+      console.log("📨 UltraMsg result:", waResult);
+
+      if (isWhatsAppSent(waResult)) {
+        const updateResult = await markWhatsAppSentInSheet(data);
+        console.log("✅ Sheet WhatsApp updated:", updateResult);
+      } else {
+        console.log("❌ WhatsApp not confirmed, sheet kept NO:", waResult);
+      }
+
     } else {
       console.log("ℹ️ No WhatsApp needed", {
         status: data.status,
+        sendWhatsApp: data.sendWhatsApp,
         phone: data.phone
       });
     }
